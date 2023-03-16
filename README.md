@@ -1,5 +1,7 @@
 # freenew: renew your Freenom domains automatically
 
+![image](https://img.shields.io/badge/Selenium-43B02A?style=for-the-badge&logo=Selenium&logoColor=white) ![image](https://img.shields.io/badge/Python-3776AB?style=for-the-badge&logo=python&logoColor=white) ![image](https://img.shields.io/badge/Docker-2CA5E0?style=for-the-badge&logo=docker&logoColor=white)
+
 `freenew` will regularly check your Freenom domain names to see if they are eligible for renewal. If so, it will renew them for you.
 
 As of 2023 Freenom no longer allows domain registrations, so this tool is only useful for renewing existing domains even if they are across multiple accounts.
@@ -40,6 +42,6 @@ Configuration is done using a `config.json` file. An example:
 }
 ```
 
-Domain names in the `excluded_domains` array will not be renewed, even if they are eligible for renewal. `freenew` assumes that a domain is renewable if it expires in less than 14 days, the minimum renewal period for free domains.
+Domain names in the `excluded_domains` array will not be renewed, even if they are eligible for renewal.
 
 The `account_intervalSeconds` value is the number of seconds to wait between each separate account sign-in. This is to avoid Freenom blocking your IP address for too many login attempts (although this has not been an issue for me, and I have made ***lots*** of logins).
