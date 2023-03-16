@@ -44,4 +44,4 @@ Configuration is done using a `config.json` file. An example:
 
 Domain names in the `excluded_domains` array will not be renewed, even if they are eligible for renewal.
 
-The `account_intervalSeconds` value is the number of seconds to wait between each separate account sign-in. This is to avoid Freenom blocking your IP address for too many login attempts (although this has not been an issue for me, and I have made ***lots*** of logins).
+The `account_interval_seconds` value is the number of seconds to wait between each separate account sign-in. This is to avoid Freenom blocking your IP address for too many login attempts (although this has not been an issue for me, and I have made ***lots*** of logins).
