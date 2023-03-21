@@ -1,3 +1,7 @@
+import logging
+from signal import getsignal, signal, SIGINT, SIGTERM
+from datetime import datetime, timedelta
+from pycron import is_now, has_been
 from time import sleep
 from json import load as json_load
 from pydantic import parse_obj_as
@@ -12,16 +16,24 @@ from models import Domain, Account, RenewError, Status
 import constants
 
 
+def get_webdriver() -> WebDriver:
+    # This prevents the webdriver from crashing when the program is terminated
+    backup_sigint_handler = getsignal(SIGINT)
+    backup_sigterm_handler = getsignal(SIGTERM)
+    driver: WebDriver = webdriver.Chrome()
+    signal(SIGINT, backup_sigint_handler)
+    signal(SIGTERM, backup_sigterm_handler)
+    return driver
+
+
 def renew_domain(driver: WebDriver, domain: Domain) -> int:
-    print(
-        f"Renewing {domain.domain_name} (expires in {domain.days_until_expiry} days)..."
-    )
+    logging.info(f"Renewing {domain.domain_name} (expires in {domain.days_until_expiry} days)...")
 
     driver.get(constants.RENEW_DOMAIN_URL + domain.domain_id)
 
-    renew_table = driver.find_element(
-        by=By.CLASS_NAME, value="table-striped"
-    ).find_element(by=By.TAG_NAME, value="tbody")
+    renew_table = driver.find_element(by=By.CLASS_NAME, value="table-striped").find_element(
+        by=By.TAG_NAME, value="tbody"
+    )
 
     renew_row = renew_table.find_element(by=By.TAG_NAME, value="tr")
 
@@ -29,20 +41,14 @@ def renew_domain(driver: WebDriver, domain: Domain) -> int:
 
     renew_dropdown = renew_columns[3].find_element(by=By.CSS_SELECTOR, value="select")
 
-    renew_dropdown.find_element(
-        by=By.CSS_SELECTOR, value=f'option[value="{constants.RENEWAL_PERIOD}"]'
-    ).click()
+    renew_dropdown.find_element(by=By.CSS_SELECTOR, value=f'option[value="{constants.RENEWAL_PERIOD}"]').click()
 
     driver.find_element(by=By.CSS_SELECTOR, value="input[type=submit]").click()
 
     # wait until strong element appears with order number
-    WebDriverWait(driver, constants.TIMEOUT).until(
-        lambda driver: driver.find_element(by=By.TAG_NAME, value="strong")
-    )
+    WebDriverWait(driver, constants.TIMEOUT).until(lambda driver: driver.find_element(by=By.TAG_NAME, value="strong"))
 
-    order_number = driver.find_element(by=By.TAG_NAME, value="strong").text.split(": ")[
-        -1
-    ]
+    order_number = driver.find_element(by=By.TAG_NAME, value="strong").text.split(": ")[-1]
     return order_number
 
 
@@ -85,10 +91,10 @@ def renew_account(driver: WebDriver, account: Account) -> int:
             ):
                 try:
                     order_number = renew_domain(driver, domain)
-                    print(f"Renewed {domain.domain_name} (order number {order_number})")
+                    logging.info(f"Renewed {domain.domain_name} (order number {order_number})")
                     renewed_count += 1
                 except Exception as e:
-                    print(f"Error renewing {domain.domain_name}: {e}")
+                    logging.error(f"Error renewing {domain.domain_name}: {e}")
 
         return renewed_count
 
@@ -100,12 +106,10 @@ def renew_account(driver: WebDriver, account: Account) -> int:
 
 
 def get_domains_of_current_account(driver: WebDriver) -> list[Domain]:
-    domain_table: WebElement = driver.find_element(
-        by=By.CLASS_NAME, value="table-striped"
-    ).find_element(by=By.TAG_NAME, value="tbody")
-    domain_rows: list[WebElement] = domain_table.find_elements(
-        by=By.TAG_NAME, value="tr"
+    domain_table: WebElement = driver.find_element(by=By.CLASS_NAME, value="table-striped").find_element(
+        by=By.TAG_NAME, value="tbody"
     )
+    domain_rows: list[WebElement] = domain_table.find_elements(by=By.TAG_NAME, value="tr")
 
     domains: list[Domain] = []
     for row in domain_rows:
@@ -117,20 +121,17 @@ def get_domains_of_current_account(driver: WebDriver) -> list[Domain]:
                 status=columns[1].text,
                 days_until_expiry=int(columns[2].text.split(" ")[0]),
                 renewable=(columns[3].text == "Renewable"),
-                domain_id=columns[4]
-                .find_element(by=By.TAG_NAME, value="a")
-                .get_attribute("href")
-                .split("=")[-1],
+                domain_id=columns[4].find_element(by=By.TAG_NAME, value="a").get_attribute("href").split("=")[-1],
             )
         )
 
     return domains
 
 
-def main() -> None:
+def routine() -> None:
     accounts: list[Account] = get_accounts()
-    driver: WebDriver = webdriver.Chrome()
     total_renewed_count = 0
+    driver: WebDriver = get_webdriver()
 
     with open(constants.CONFIG_FILE, "r") as f:
         config = json_load(f)
@@ -138,23 +139,60 @@ def main() -> None:
 
     for account in accounts:
         try:
-            print(f"Renewing account {account.username}...")
+            logging.info(f"Renewing account {account.username}...")
             total_renewed_count += renew_account(driver, account)
         except RenewError as e:
-            print(e)
+            logging.error(e)
         finally:
             logout_from_freenom(driver)
             if account != accounts[-1]:
-                print(
-                    f"Waiting {account_interval_seconds} before renewing next account..."
-                )
+                logging.info(f"Waiting {account_interval_seconds} seconds before renewing next account...")
                 sleep(account_interval_seconds)
 
-    print(
-        f"Renewed {total_renewed_count} domain{'s' if total_renewed_count != 1 else ''} in total."
-    )
+    logging.info(f"Renewed {total_renewed_count} domain{'s' if total_renewed_count != 1 else ''} in total.")
     driver.quit()
 
 
 if __name__ == "__main__":
-    main()
+    crontab: str
+    exit_signal: bool = False
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(levelname)s - %(message)s",
+        handlers=[logging.StreamHandler()],
+    )
+
+    def signal_handler(signal, frame):
+        logging.info("Received exit signal. Finishing any current renewal routine and exiting...")
+        global exit_signal
+        exit_signal = True
+
+    signal(SIGINT, signal_handler)
+    signal(SIGTERM, signal_handler)
+
+    with open(constants.CONFIG_FILE, "r") as f:
+        try:
+            crontab = json_load(f)["crontab"]
+        except KeyError:
+            crontab = "0 16 * * *"
+
+    last_renewal = datetime.min
+
+    if exit_signal:
+        logging.info("Exiting...")
+        exit(0)
+
+    while True:
+        if last_renewal.replace(microsecond=0, second=0) != datetime.now().replace(microsecond=0, second=0) and (
+            is_now(crontab) or has_been(crontab, last_renewal.replace(microsecond=0, second=0) + timedelta(minutes=1))
+        ):
+            logging.info("Starting automated renewal routine...")
+            try:
+                routine()
+                last_renewal = datetime.now()
+            except Exception as e:
+                logging.error(f"Error running routine: {e}. Will try again in {constants.RETRY_SECONDS} seconds...")
+                sleep(constants.RETRY_SECONDS)
+        else:
+            # wait until the next minute
+            sleep(60 - datetime.now().second)

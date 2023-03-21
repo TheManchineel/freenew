@@ -7,3 +7,4 @@ LOGOUT_URL = "https://my.freenom.com/logout.php"
 CONFIG_FILE = "config.json"
 RENEWAL_PERIOD = "12M"
 TIMEOUT = 30  # seconds
+RETRY_SECONDS = 60
