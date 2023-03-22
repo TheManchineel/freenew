@@ -1,11 +1,13 @@
 import logging
-from signal import getsignal, signal, SIGINT, SIGTERM
+from signal import signal, SIGINT, SIGTERM
 from datetime import datetime, timedelta
 from pycron import is_now, has_been
 from time import sleep
 from json import load as json_load
 from pydantic import parse_obj_as
-from selenium import webdriver
+from selenium.webdriver import Remote
+from pexpect import spawn
+from contextlib import contextmanager
 from selenium.webdriver.common.by import By
 from selenium.webdriver.remote.webelement import WebElement
 from selenium.webdriver.remote.webdriver import WebDriver
@@ -16,14 +18,20 @@ from models import Domain, Account, RenewError, Status
 import constants
 
 
+@contextmanager
 def get_webdriver() -> WebDriver:
-    # This prevents the webdriver from crashing when the program is terminated
-    backup_sigint_handler = getsignal(SIGINT)
-    backup_sigterm_handler = getsignal(SIGTERM)
-    driver: WebDriver = webdriver.Chrome()
-    signal(SIGINT, backup_sigint_handler)
-    signal(SIGTERM, backup_sigterm_handler)
-    return driver
+    try:
+        session = spawn("chromedriver", ["--port=4444", "--url-base=/wd/hub"])
+        session.expect("ChromeDriver was started successfully.")
+        driver = Remote(
+            command_executor="http://localhost:4444/wd/hub",
+        )
+        yield driver
+    except Exception as e:
+        raise RenewError(f"Error getting webdriver: {e}")
+    finally:
+        driver.quit()
+        session.terminate()
 
 
 def renew_domain(driver: WebDriver, domain: Domain) -> int:
@@ -129,28 +137,27 @@ def get_domains_of_current_account(driver: WebDriver) -> list[Domain]:
 
 
 def routine() -> None:
-    accounts: list[Account] = get_accounts()
-    total_renewed_count = 0
-    driver: WebDriver = get_webdriver()
+    with get_webdriver() as driver:
+        accounts: list[Account] = get_accounts()
+        total_renewed_count = 0
 
-    with open(constants.CONFIG_FILE, "r") as f:
-        config = json_load(f)
-        account_interval_seconds = config["account_interval_seconds"]
+        with open(constants.CONFIG_FILE, "r") as f:
+            config = json_load(f)
+            account_interval_seconds = config["account_interval_seconds"]
 
-    for account in accounts:
-        try:
-            logging.info(f"Renewing account {account.username}...")
-            total_renewed_count += renew_account(driver, account)
-        except RenewError as e:
-            logging.error(e)
-        finally:
-            logout_from_freenom(driver)
-            if account != accounts[-1]:
-                logging.info(f"Waiting {account_interval_seconds} seconds before renewing next account...")
-                sleep(account_interval_seconds)
+        for account in accounts:
+            try:
+                logging.info(f"Renewing account {account.username}...")
+                total_renewed_count += renew_account(driver, account)
+            except RenewError as e:
+                logging.error(e)
+            finally:
+                logout_from_freenom(driver)
+                if account != accounts[-1]:
+                    logging.info(f"Waiting {account_interval_seconds} seconds before renewing next account...")
+                    sleep(account_interval_seconds)
 
-    logging.info(f"Renewed {total_renewed_count} domain{'s' if total_renewed_count != 1 else ''} in total.")
-    driver.quit()
+        logging.info(f"Renewed {total_renewed_count} domain{'s' if total_renewed_count != 1 else ''} in total.")
 
 
 if __name__ == "__main__":
@@ -178,11 +185,11 @@ if __name__ == "__main__":
 
     last_renewal = datetime.min
 
-    if exit_signal:
-        logging.info("Exiting...")
-        exit(0)
-
     while True:
+        if exit_signal:
+            logging.info("Exiting...")
+            exit(0)
+
         if last_renewal.replace(microsecond=0, second=0) != datetime.now().replace(microsecond=0, second=0) and (
             is_now(crontab) or has_been(crontab, last_renewal.replace(microsecond=0, second=0) + timedelta(minutes=1))
         ):
@@ -194,5 +201,4 @@ if __name__ == "__main__":
                 logging.error(f"Error running routine: {e}. Will try again in {constants.RETRY_SECONDS} seconds...")
                 sleep(constants.RETRY_SECONDS)
         else:
-            # wait until the next minute
-            sleep(60 - datetime.now().second)
+            sleep(5)
