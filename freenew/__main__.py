@@ -5,27 +5,33 @@ from pycron import is_now, has_been
 from time import sleep
 from json import load as json_load
 from pydantic import parse_obj_as
-from selenium.webdriver import Remote
 from pexpect import spawn
 from contextlib import contextmanager
+from selenium.webdriver import Remote
+from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.remote.webelement import WebElement
 from selenium.webdriver.remote.webdriver import WebDriver
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.common.exceptions import TimeoutException
 
-from models import Domain, Account, RenewError, Status
-import constants
+from .models import Domain, Account, RenewError, Status
+from . import constants
 
 
 @contextmanager
 def get_webdriver() -> WebDriver:
     try:
-        session = spawn("chromedriver", ["--port=4444", "--url-base=/wd/hub"])
-        session.expect("ChromeDriver was started successfully.")
-        driver = Remote(
-            command_executor="http://localhost:4444/wd/hub",
-        )
+        options = Options()
+        options.add_argument("--headless")
+        options.add_argument("--no-sandbox") # required when running as root user; TODO: create a separate user
+        options.add_argument("--disable-dev-shm-usage")
+
+        session = spawn(*constants.DRIVER_START_COMMAND)
+        session.expect(constants.STARTUP_SUCESS_MESSAGE)
+
+        driver = Remote(command_executor=constants.REMOTE_EXECUTOR_URL, options=options)
+        
         yield driver
     except Exception as e:
         raise RenewError(f"Error getting webdriver: {e}")
